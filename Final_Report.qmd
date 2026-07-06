@@ -1,0 +1,35 @@
+---
+title: "\\Large ST 733 Final Project"
+author: "Connor McNeill"
+format: pdf
+editor: visual
+date: today
+date-format: long
+include-in-header: header.tex
+---
+
+## Objectives of the Original Paper
+
+The paper that we selected for the project is "Crime in Philadephia: Bayesian Clustering with Particle Optimization" by Balocchi et. al (2022). The goal that the paper had was to cluster neighborhoods in Philadelphia based on crime density. The authors aim was to create two sets of clusters: one based on the baseline crime density and the other based on time trends. The goals of each cluster were to not only be able to cluster neighborhoods based on the crime density, but also to see if there are specific clusters that improved over time. Another issue that the authors aim to address is that there can be spatial discontinuities between neighborhoods, which means that there can be downsides to utilizing a typical CAR model that borrows heavily from neighbors. As such, one of the authors' objectives was to develop a method that was able to handle these discontinuities.
+
+## Data Structure
+
+Our dataset is crime data from the city of Philadelphia. The data is publicly available online at `opendataphilly.org`, where the Philadelphia Police Department releases the location, time, and type of each reported crime in the city. We will only look at violent crimes that occurred between 2006 and 2017. This data is aggregated at the census tract level, so we have data for each of the 384 census tracts within Philadelphia. Our goal is to look at the violent crime density, defined as the number of violent crimes divided by the land area in square miles.
+
+## The Authors' Approach
+
+The authors propose a Bayesian hierarchical model to cluster the dataset. They introduce parameters $\alpha_i$ and $\beta_i$ for each census tract and fit the model $y_{i,t} \sim N(\alpha_i + \beta_i x_t, \sigma^2)$ where $\alpha_i$ approximates the mean level and $\beta_i$ approximates the time trend of the transformed crime density $y_{i,t}$. In order to use our Gaussian model, a inverse hyperbolic sine transformation is applied to the crime densities. In order to borrow strength from neighboring census tracts, the authors propose the "CAR-within-clusters" model which allow for the typical spatial continuity within clusters but allows for spatial discontinuity between clusters. In terms of the model structure, truncated Ewens-Pitman priors are utilized for clustering into spatial partitions based on both parameters $\alpha$ and $\beta$. These priors allow for a flexible number of spatial partitions. For computation, the authors utilize a variational inference approach using particle optimization. Their approach is to estimate the $L$ pairs of partitions with the largest posterior mass.
+
+## Alternative Analysis Proposal
+
+I appreciate the objectives of the paper and the approach the authors employed in their analysis. The CAR-within-clusters model is well-formulated, and they have established a robust framework. However, I believe they may have overcomplicated certain aspects of their analysis. For instance, when I implemented their method, the model setup allowed for a flexible number of clusters, resulting in the majority of clusters being singletons. Furthermore, when clustering based on baseline crime density, there were 94 clusters despite only 384 census tracts. Additionally, the clustering based on time trend did not perform well, as only one true cluster was formed, and the rest were singletons.
+
+I propose a simpler Bayesian spatial clustering approach implemented using Markov Chain Monte Carlo (MCMC). While this approach may be less flexible, it offers greater interpretability. We will cluster based solely on baseline crime density, aggregating the crime density across all years in the dataset. Additionally, we can leverage the functions available in the `CARBayes` package for efficient computation.
+
+We will fit the model based on $Y_i \sim \text{Poisson}(A_i \lambda_i)$ where $Y_i$ is the number of violent crimes in census tract $i$, $A_i$ is the area of the census tract in square miles, and $\lambda_i$ is the crime density in census tract $i$. This is a log-link Poisson regression model which can be fit as a spatial GLM: $\log(\lambda_i) = \mu_i + \theta_i$ where $\mu_i$ is the intercept and $\theta_i$ is the spatial random effect. We will use the `S.CARlocalized` function which uses the model proposed by Lee and Sarran (2015) to cluster into $G$ clusters which are differentiated in the model by having a differing intercept. This model approach allows for neighboring areas to have very different values even though we are incorporating a CAR model. We will choose $G = 3$ clusters to group spatially into low, moderate, and high levels of crime density. Then we will look at the clusters and divide them into the neighborhoods defined as areas within the same cluster that are spatially connected.
+
+## New Analysis Results
+
+Figure 1 shows the results of our analysis. We are able to spatially cluster based on baseline crime density into 3 clusters based on crime density. These clusters are built with spatial dependence via the intrinsic CAR model prior used on the spatial random effects. However, our approach still allows for spatial discontinuities between clusters. From the 3 clusters of baseline crime data, we obtain 28 spatial partitions which are grouped by similar levels of baseline crime. Additionally, only 7 of them were "islands" (meaning that they only contained one census tract), which is an improvement over the previous clustering approach that had 94 neighborhood clusters with 73 of them being islands.
+
+![This figure shows the clusters that were output by the MCMC. The 28 neighborhood clusters are outlined in black. Cluster 1 (red) represents the lower crime density, Cluster 2 (green) represents moderate crime density, and Cluster 3 (blue) represents high crime density.](images/clipboard-3806125435.png)

@@ -1,0 +1,118 @@
+---
+title: "New Analysis"
+author: "Connor McNeill"
+format: html
+---
+
+## Introduction
+
+## Load in the data
+
+```{r}
+#| label: load and clean data for analysis
+
+# Load in necessary packages
+library(sf)
+library(tigris)
+library(tidyverse)
+library(spdep)
+library(igraph)
+
+# Load in the cleaned dataset used in the anlaysis
+load('crime_tract2019.rdata')
+
+# Load in the census tracts for Philadelphia
+philly_tracts <- tracts(state = "PA", 
+                        county = "Philadelphia", 
+                        year = 2017, 
+                        cb = TRUE)
+
+# Aggregate the number of violent crimes across the years
+# and compute the crime density
+crime_tract_agg <- crime_tract2019 |>
+  group_by(X, GEOID10) |>
+  summarize(ViolentAgg = sum(violent),
+            LandArea = median(ALAND10_sqmile)) |>
+  mutate(DensityAgg = ViolentAgg / LandArea) |>
+  inner_join(philly_tracts, by = c('GEOID10' = 'GEOID')) |>
+  st_as_sf()
+
+# Compute adjacency matrix
+neighbors <- poly2nb(crime_tract_agg)
+W <- nb2mat(neighbors, style="B", zero.policy=TRUE)
+
+# Compute the log area
+crime_tract_agg <- crime_tract_agg |>
+  mutate(logArea = log(LandArea))
+```
+
+## Run the Analysis
+
+```{r}
+# Fit the CARBayes model
+library(CARBayes)
+results = S.CARlocalised(
+  formula = ViolentAgg ~ offset(logArea), # need to take log of area for the offset
+  family = 'poisson', # fit poisson regression model but modeling the density
+  data = crime_tract_agg,
+  W = W,
+  G = 3, # Up to 3 groups: low, medium, high crime density
+  burnin = 100000,
+  n.sample = 200000,
+  thin = 10
+)
+
+# Get the overall clusters based on crime density
+results$localised.structure
+crime_tract_agg$cluster_res = as.factor(results$localised.structure)
+
+# ---- Code to determine the neighborhood clusters ----
+# Create an empty graph from your adjacency list
+g <- graph_from_adj_list(neighbors)
+
+# Find the edges (borders) between tracts with DIFFERENT clusters
+edges <- as_edgelist(g)
+cluster_assignments <- crime_tract_agg$cluster_res
+
+# Identify edges where the cluster assignment doesn't match
+borders_to_cut <- which(cluster_assignments[edges[,1]] != cluster_assignments[edges[,2]])
+
+# Delete those edges to isolate the neighborhoods
+g_isolated <- delete_edges(g, borders_to_cut)
+
+# Extract the contiguous neighborhoods!
+# components() finds all the disconnected "islands" in the graph
+contiguous_neighborhoods <- components(g_isolated)$membership
+
+# Add this back to your spatial dataframe
+crime_tract_agg$unique_neighborhood_id <- as.factor(contiguous_neighborhoods)
+
+neighborhood_outlines <- crime_tract_agg %>%
+  group_by(unique_neighborhood_id) %>%  # Group by the CARBayes risk cluster
+  summarise(geometry = st_union(geometry)) # st_union merges the adjacent polygons
+```
+
+## Analyze the Results: Plots
+
+```{r}
+# Make maps of the clusters
+ggplot(crime_tract_agg) +
+  geom_sf(aes(fill = cluster_res)) +
+  geom_sf(data = neighborhood_outlines, fill = NA,
+          color = 'black',
+          linewidth = 0.4) +
+  theme_bw() +
+  labs(fill = 'Clusters') 
+
+ggplot(crime_tract_agg) +
+  geom_sf(aes(fill = unique_neighborhood_id),
+          show.legend = FALSE) +
+  geom_sf(data = neighborhood_outlines, fill = NA,
+          color = 'black',
+          linewidth = 0.4) +
+  labs(fill = 'Neighborhood Clusters') + 
+  theme_bw()
+table(crime_tract_agg$unique_neighborhood_id)
+```
+
+We get 28 neighborhood clusters, of which only 8 are "islands". We have a couple neighborhood clusters that are quite large especially in the middle part of the city of Philadelphia. Additionally, the method only takes about one minute total to compute even doing 200,000 MCMC iterations (with thinning = 10).

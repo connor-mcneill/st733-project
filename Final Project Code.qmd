@@ -1,0 +1,95 @@
+---
+title: "Plots for JASA Presentation"
+author: "Connor McNeill"
+format: html
+editor: visual
+---
+
+## Map of Violent Crime in Philadelphia by Census Tract
+
+```{r}
+library(sf)
+library(tigris)
+library(tidyverse)
+
+# 1. Write your SQL query (no need for ST_X / ST_Y here)
+sql_query <- "SELECT * FROM incidents_part1_part2 
+              WHERE dispatch_date_time >= '2006-01-01' 
+              AND dispatch_date_time < '2018-01-01' 
+              AND text_general_code IN (
+                'Homicide - Criminal', 
+                'Homicide - Justifiable', 
+                'Homicide - Gross Negligence', 
+                'Rape', 
+                'Robbery Firearm', 
+                'Robbery No Firearm', 
+                'Aggravated Assault No Firearm', 
+                'Aggravated Assault Firearm'
+              )"
+
+# 2. Build the URL, but change 'format=csv' to 'format=geojson'
+api_url <- paste0("https://phl.carto.com/api/v2/sql?format=geojson&q=", sql_query)
+encoded_url <- URLencode(api_url)
+
+# 3. Read directly into a spatial dataframe using st_read()
+spatial_crime_data <- st_read(encoded_url)
+
+# Now you can easily plot it!
+plot(st_geometry(spatial_crime_data))
+
+# Convert ucr code to integer
+spatial_crime_data = spatial_crime_data |> 
+  mutate(ucr_general = as.integer(ucr_general)) |>
+  filter(ucr_general <= 400)
+
+philly_tracts <- tracts(state = "PA", 
+                        county = "Philadelphia", 
+                        year = 2017, 
+                        cb = TRUE)
+
+crime_sf <- st_transform(spatial_crime_data, st_crs(philly_tracts))
+crimes_with_tracts <- st_join(crime_sf, philly_tracts)
+
+crime_counts <- crimes_with_tracts %>%
+  # Group by the unique census tract identifier
+  group_by(GEOID) %>%
+  # Count the number of rows (crimes) in each group
+  summarize(total_violent_crimes = n()) %>%
+  # Drop the spatial geometry so it becomes a standard, lightweight dataframe
+  st_drop_geometry()
+
+philly_crime_map <- philly_tracts %>%
+  # Merge the counts onto the spatial polygons
+  left_join(crime_counts, by = "GEOID") %>%
+  # If a tract had 0 crimes, it will show up as NA. Let's convert those NAs to 0s.
+  mutate(total_violent_crimes = ifelse(is.na(total_violent_crimes), 0, total_violent_crimes))
+
+ggplot(philly_crime_map) +
+  geom_sf(aes(fill = total_violent_crimes)) +
+  scale_fill_viridis_c() +
+  labs(fill = 'Violent Crimes',
+       title = "Violent Crimes per Census Tract, 2006 - 2017") +
+  theme_void()
+
+units(philly_crime_map$ALAND) = 'm^2'
+units(philly_crime_map$ALAND) = 'mi^2'
+philly_crime_map$ALAND = drop_units(philly_crime_map$ALAND)
+
+philly_crime_map = philly_crime_map |>
+  mutate(crime_density = total_violent_crimes / ALAND)
+
+ggplot(philly_crime_map) +
+  geom_sf(aes(fill = crime_density)) +
+  scale_fill_viridis_c(trans = 'asinh',
+                       breaks = c(4, 30, 200, 1500, 10000)) +
+  labs(fill = 'Violent Crime Density',
+       title = "Violent Crime Density per Census Tract, 2006 - 2017") +
+  theme_void()
+
+ggplot(philly_crime_map) +
+  geom_sf(aes(fill = crime_density)) +
+  scale_fill_viridis_c() +
+  labs(fill = 'Violent Crime Density',
+       title = "Violent Crime Density per Census Tract, 2006 - 2017") +
+  theme_void()
+```

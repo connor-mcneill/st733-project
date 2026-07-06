@@ -1,0 +1,18 @@
+\usepackage{xcolor}
+
+\renewcommand{\familydefault}{\sfdefault}
+
+\makeatletter
+\renewcommand{\maketitle}{
+  \begin{center}
+    {\Huge\bfseries \@title \par}
+    \vspace{0.5em}
+    {\large\itshape \@author \par}
+    \vspace{0.5em}
+    {\small \@date \par}
+    \vspace{1em}
+    \hrule
+    \vspace{1em}
+  \end{center}
+}
+\makeatother

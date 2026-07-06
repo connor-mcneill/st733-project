@@ -1,0 +1,123 @@
+---
+title: "Reproducing the Results"
+author: "Connor McNeill"
+format: html
+---
+
+## Introduction
+
+We would like to reproduce the results from the paper.
+
+```{r}
+#| label: load in package from paper
+
+library(devtools)
+#devtools::install_github(repo = "cecilia-balocchi/particle-optimization/PARTOPT")
+library(PARTOPT)
+```
+
+Next we'd like to get the dataset loaded in. This comes already processed from the authors' Github repository.
+
+```{r}
+#| label: load and process dataset
+
+# Load in necessary packages
+library(sf)
+library(tigris)
+library(tidyverse)
+library(spdep)
+
+# Load in the cleaned dataset used in the anlaysis
+load('crime_tract2019.rdata')
+
+# Load in the census tracts for Philadelphia
+philly_tracts <- tracts(state = "PA", 
+                        county = "Philadelphia", 
+                        year = 2017, 
+                        cb = TRUE)
+ncols = 13
+
+# --- Code below is from the authors' create_tracts_data.R file ---
+
+# we save the csv in matrix form, with each row corresponding to a neighborhood, each column to a year
+Y <- matrix(crime_tract2019$tr.density, ncol = ncols, byrow = T)
+X <- matrix(crime_tract2019$year19, ncol = ncols, byrow = T)
+E <- matrix(crime_tract2019$ALAND10_sqmile, ncol = ncols, byrow = T)
+
+# we have formatted these variables to include also the year 2018 as the last column.
+# however, since we'll use that year for out of sample prediction, we remove it now
+Y <- Y[,-ncols]
+X <- X[,-ncols]
+E <- E[,-ncols]
+
+# Let's now save the adjacency matrix
+# get the adjacency matrix from the shapefile
+n_tr <- dim(philly_tracts)[1]
+list.poly <- poly2nb(philly_tracts)
+w <- matrix(data = 0, nrow = n_tr, ncol = n_tr)
+for(i in 1:n_tr){
+  w[i, list.poly[[i]]] <- 1
+}
+
+# let's now save as CSV in data
+write.table(w, row.names = FALSE, col.names = FALSE, sep = ',', file = "data/A_block_density.csv")
+write.table(X, row.names = FALSE, col.names = FALSE, sep = ',', file = "data/X_density.csv")
+write.table(Y, row.names = FALSE, col.names = FALSE, sep = ',', file = "data/Y_density.csv")
+write.table(E, row.names = FALSE, col.names = FALSE, sep = ',', file = "data/E_density.csv")
+```
+
+## Replicate the results using `PARTOPT` function
+
+```{r}
+#| label: run PARTOPT on dataset
+
+# Load in the data
+str <- "_density.csv"
+A_block <- read.csv(paste0("data/A_block",str), header = F)
+Y <- read.csv(paste0("data/Y",str), header = F)
+X <- read.csv(paste0("data/X",str), header = F)
+
+# Setup the data
+## convert A_block to matrix
+A_block <- as.matrix(A_block)
+colnames(A_block) <- c()
+## convert Y to matrix
+Y <- as.matrix(Y)
+colnames(Y) <- c()
+## convert X to matrix
+X <- as.matrix(X)
+colnames(X) <- c()
+## scale and center X
+X <- X - rowMeans(X)
+X <- X/apply(X, 1, sd)
+## set adjacency matrix
+W <- A_block
+
+# Run the PARTOPT function to get results
+N = nrow(Y)
+start = Sys.time()
+results = PARTOPT(Y, X, W, L = 10, max_iter = 25,
+                  eta_py = 5, sigma_py = 0,
+                  lambda = 100, 
+                  rho = 0.9,
+                  priorA = 'ep', priorB = 'ep')
+stop = Sys.time() 
+
+save(results, file = 'results_partopt.rdata')
+```
+
+I utilized the `PARTOPT` function from their package associated with the paper to replicate the analysis. The authors' original code had set `max_iters` (the maximum number of iterations) to be 500. However, due to runtime, we set it to be 25 iterations as that is the default of the function. Even 25 iterations with 10 particles took nearly 2.5 hours to run. While the clustering based on time trend appeared to converge to a result within a few iterations, the clustering for the baseline crime density maxed out at the maximum number of iterations.
+
+## Look at the results
+
+```{r}
+#| label: results
+
+load('results_partopt.rdata')
+results$final$particle_set_A[[1]]
+results$final$particle_set_B[[1]]
+```
+
+The particle optimization method created a top particle with 94 clusters based on baseline crime data, with two primary clusters: one containing 111 of the census tracts, and the other containing 146 of the census tracts. The remaining 129 census tracts were split between the remaining 92 clusters, meaning that 73 of the 94 clusters only contained one neighborhood.
+
+Looking at clustering based on time trends, our top particle only produced 4 clusters, with the first cluster containing all but 3 census tracts, and the other 3 clusters being one census tract each.
